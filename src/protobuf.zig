@@ -201,7 +201,7 @@ fn append_as_varint(pb: *ArrayList(u8), int: anytype, comptime varint_type: Vari
     const type_of_val = @TypeOf(int);
     const bitsize = @bitSizeOf(type_of_val);
     const val: u64 = blk: {
-        if (@typeInfo(type_of_val).Int.signedness == .signed) {
+        if (@typeInfo(type_of_val).int.signedness == .signed) {
             switch (varint_type) {
                 .ZigZagOptimized => {
                     break :blk @as(u64, @intCast((int >> (bitsize - 1)) ^ (int << 1)));
@@ -222,8 +222,8 @@ fn append_as_varint(pb: *ArrayList(u8), int: anytype, comptime varint_type: Vari
 /// Only serves as an indirection to manage Enum and Booleans properly.
 fn append_varint(pb: *ArrayList(u8), value: anytype, comptime varint_type: VarintType) !void {
     switch (@typeInfo(@TypeOf(value))) {
-        .Enum => try append_as_varint(pb, @as(i32, @intFromEnum(value)), varint_type),
-        .Bool => try append_as_varint(pb, @as(u8, if (value) 1 else 0), varint_type),
+        .@"enum" => try append_as_varint(pb, @as(i32, @intFromEnum(value)), varint_type),
+        .bool => try append_as_varint(pb, @as(u8, if (value) 1 else 0), varint_type),
         else => try append_as_varint(pb, value, varint_type),
     }
 }
@@ -332,9 +332,9 @@ fn append(pb: *ArrayList(u8), comptime field: FieldDescriptor, value: anytype, c
 
     // TODO: review semantics of default-value in regards to wire protocol
     const is_default_scalar_value = switch (@typeInfo(@TypeOf(value))) {
-        .Optional => value == null,
+        .optional => value == null,
         // as per protobuf spec, the first element of the enums must be 0 and it is the default value
-        .Enum => @intFromEnum(value) == 0,
+        .@"enum" => @intFromEnum(value) == 0,
         else => switch (@TypeOf(value)) {
             bool => value == false,
             i32, u32, i64, u64, f32, f64 => value == 0,
@@ -423,11 +423,11 @@ fn append(pb: *ArrayList(u8), comptime field: FieldDescriptor, value: anytype, c
 /// Internal function that decodes the descriptor information and struct fields
 /// before passing them to the append function
 fn internal_pb_encode(pb: *ArrayList(u8), data: anytype) !void {
-    const field_list = @typeInfo(@TypeOf(data)).Struct.fields;
+    const field_list = @typeInfo(@TypeOf(data)).@"struct".fields;
     const data_type = @TypeOf(data);
 
     inline for (field_list) |field| {
-        if (@typeInfo(field.type) == .Optional) {
+        if (@typeInfo(field.type) == .optional) {
             if (@field(data, field.name)) |value| {
                 try append(pb, @field(data_type._desc_table, field.name), value, true);
             }
@@ -449,9 +449,9 @@ pub fn pb_encode(data: anytype, allocator: Allocator) ![]u8 {
 
 fn get_field_default_value(comptime for_type: anytype) for_type {
     return switch (@typeInfo(for_type)) {
-        .Optional => null,
+        .optional => null,
         // as per protobuf spec, the first element of the enums must be 0 and it is the default value
-        .Enum => @as(for_type, @enumFromInt(0)),
+        .@"enum" => @as(for_type, @enumFromInt(0)),
         else => switch (for_type) {
             bool => false,
             i32, i64, i8, i16, u8, u32, u64, f32, f64 => 0,
@@ -464,11 +464,11 @@ fn get_field_default_value(comptime for_type: anytype) for_type {
 /// Generic init function. Properly initialise any field required. Meant to be embedded in generated structs.
 pub fn pb_init(comptime T: type, allocator: Allocator) T {
     var value: T = undefined;
-    inline for (@typeInfo(T).Struct.fields) |field| {
+    inline for (@typeInfo(T).@"struct".fields) |field| {
         switch (@field(T._desc_table, field.name).ftype) {
             .String, .Varint, .FixedInt, .Bytes => {
-                if (field.default_value) |val| {
-                    @field(value, field.name) = @as(*align(1) const field.type, @ptrCast(val)).*;
+                if (field.defaultValue()) |val| {
+                    @field(value, field.name) = val;
                 } else {
                     @field(value, field.name) = get_field_default_value(field.type);
                 }
@@ -565,7 +565,7 @@ fn dupe_field(original: anytype, comptime field_name: []const u8, comptime ftype
 pub fn pb_deinit(data: anytype) void {
     const T = @TypeOf(data);
 
-    inline for (@typeInfo(T).Struct.fields) |field| {
+    inline for (@typeInfo(T).@"struct".fields) |field| {
         deinit_field(data, field.name, @field(T._desc_table, field.name).ftype);
     }
 }
@@ -576,12 +576,12 @@ fn deinit_field(result: anytype, comptime field_name: []const u8, comptime ftype
         .Varint, .FixedInt => {},
         .SubMessage => {
             switch (@typeInfo(@TypeOf(@field(result, field_name)))) {
-                .Optional => {
+                .optional => {
                     if (@field(result, field_name)) |submessage| {
                         submessage.deinit();
                     }
                 },
-                .Struct => @field(result, field_name).deinit(),
+                .@"struct" => @field(result, field_name).deinit(),
                 else => @compileError("unreachable"),
             }
         },
@@ -601,7 +601,7 @@ fn deinit_field(result: anytype, comptime field_name: []const u8, comptime ftype
         },
         .String, .Bytes => {
             switch (@typeInfo(@TypeOf(@field(result, field_name)))) {
-                .Optional => {
+                .optional => {
                     if (@field(result, field_name)) |str| {
                         str.deinit();
                     }
@@ -811,7 +811,7 @@ pub const WireDecoderIterator = struct {
 fn decode_varint_value(comptime T: type, comptime varint_type: VarintType, raw: u64) DecodingError!T {
     return switch (varint_type) {
         .ZigZagOptimized => switch (@typeInfo(T)) {
-            .Int => {
+            .int => {
                 const t = @as(T, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(raw))));
                 return @as(T, @intCast((t >> 1) ^ (-(t & 1))));
             },
@@ -819,13 +819,13 @@ fn decode_varint_value(comptime T: type, comptime varint_type: VarintType, raw: 
             else => @compileError("Invalid type passed"),
         },
         .Simple => switch (@typeInfo(T)) {
-            .Int => switch (T) {
+            .int => switch (T) {
                 u8, u16, u32, u64 => @as(T, @intCast(raw)),
                 i32, i64 => @as(T, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(raw)))),
                 else => @compileError("Invalid type " ++ @typeName(T) ++ " passed"),
             },
-            .Bool => raw != 0,
-            .Enum => if (raw > std.math.maxInt(u32))
+            .bool => raw != 0,
+            .@"enum" => if (raw > std.math.maxInt(u32))
                 error.InvalidInput
             else
                 @as(T, @enumFromInt(@as(i32, @bitCast(@as(u32, @intCast(raw)))))),
@@ -910,12 +910,12 @@ fn decode_data(comptime T: type, comptime field_desc: FieldDescriptor, comptime 
 
             // then apply the new value
             switch (@typeInfo(field.type)) {
-                .Optional => |optional| @field(result, field.name) = try decode_value(optional.child, field_desc.ftype, extracted_data, allocator),
+                .optional => |optional| @field(result, field.name) = try decode_value(optional.child, field_desc.ftype, extracted_data, allocator),
                 else => @field(result, field.name) = try decode_value(field.type, field_desc.ftype, extracted_data, allocator),
             }
         },
         .List, .PackedList => |list_type| {
-            const child_type = @typeInfo(@TypeOf(@field(result, field.name).items)).Pointer.child;
+            const child_type = @typeInfo(@TypeOf(@field(result, field.name).items)).pointer.child;
 
             switch (list_type) {
                 .Varint => |varint_type| {
@@ -987,7 +987,7 @@ pub fn pb_decode(comptime T: type, input: []const u8, allocator: Allocator) !T {
     var iterator = WireDecoderIterator{ .input = input };
 
     while (try iterator.next()) |extracted_data| {
-        inline for (@typeInfo(T).Struct.fields) |field| {
+        inline for (@typeInfo(T).@"struct".fields) |field| {
             const v = @field(T._desc_table, field.name);
             if (is_tag_known(v, extracted_data)) {
                 break try decode_data(T, v, field, &result, extracted_data, allocator);
