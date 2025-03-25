@@ -411,7 +411,7 @@ fn append(pb: *ArrayList(u8), comptime field: FieldDescriptor, value: anytype, c
         .OneOf => |union_type| {
             // iterate over union tags until one matches `active_union_tag` and then use the comptime information to append the value
             const active_union_tag = @tagName(value);
-            inline for (@typeInfo(@TypeOf(union_type._union_desc)).Struct.fields) |union_field| {
+            inline for (@typeInfo(@TypeOf(union_type._union_desc)).@"struct".fields) |union_field| {
                 if (std.mem.eql(u8, union_field.name, active_union_tag)) {
                     try append(pb, @field(union_type._union_desc, union_field.name), @field(value, union_field.name), force_append);
                 }
@@ -493,7 +493,7 @@ pub fn pb_init(comptime T: type, allocator: Allocator) T {
 pub fn pb_dupe(comptime T: type, original: T, allocator: Allocator) !T {
     var result: T = undefined;
 
-    inline for (@typeInfo(T).Struct.fields) |field| {
+    inline for (@typeInfo(T).@"struct".fields) |field| {
         @field(result, field.name) = try dupe_field(original, field.name, @field(T._desc_table, field.name).ftype, allocator);
     }
 
@@ -546,7 +546,7 @@ fn dupe_field(original: anytype, comptime field_name: []const u8, comptime ftype
             // if the value is set, inline-iterate over the possible OneOfs
             if (@field(original, field_name)) |union_value| {
                 const active = @tagName(union_value);
-                inline for (@typeInfo(@TypeOf(one_of._union_desc)).Struct.fields) |union_field| {
+                inline for (@typeInfo(@TypeOf(one_of._union_desc)).@"struct".fields) |union_field| {
                     // and if one matches the actual tagName of the union
                     if (std.mem.eql(u8, union_field.name, active)) {
                         // deinit the current value
@@ -613,7 +613,7 @@ fn deinit_field(result: anytype, comptime field_name: []const u8, comptime ftype
             // if the value is set, inline-iterate over the possible OneOfs
             if (@field(result, field_name)) |union_value| {
                 const active = @tagName(union_value);
-                inline for (@typeInfo(@TypeOf(union_type._union_desc)).Struct.fields) |union_field| {
+                inline for (@typeInfo(@TypeOf(union_type._union_desc)).@"struct".fields) |union_field| {
                     // and if one matches the actual tagName of the union
                     if (std.mem.eql(u8, union_field.name, active)) {
                         // deinit the current value
@@ -815,7 +815,7 @@ fn decode_varint_value(comptime T: type, comptime varint_type: VarintType, raw: 
                 const t = @as(T, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(raw))));
                 return @as(T, @intCast((t >> 1) ^ (-(t & 1))));
             },
-            .Enum => @as(T, @enumFromInt(@as(i32, @intCast((@as(i64, @intCast(raw)) >> 1) ^ (-(@as(i64, @intCast(raw)) & 1)))))),
+            .@"enum" => @as(T, @enumFromInt(@as(i32, @intCast((@as(i64, @intCast(raw)) >> 1) ^ (-(@as(i64, @intCast(raw)) & 1)))))),
             else => @compileError("Invalid type passed"),
         },
         .Simple => switch (@typeInfo(T)) {
@@ -949,7 +949,7 @@ fn decode_data(comptime T: type, comptime field_desc: FieldDescriptor, comptime 
             // 1. creates a compile time for iterating over all `one_of._union_desc` fields
             // 2. when a match is found, it creates the union value in the `field.name` property of the struct `result`. breaks the for at that point
             const desc_union = one_of._union_desc;
-            inline for (@typeInfo(one_of).Union.fields) |union_field| {
+            inline for (@typeInfo(one_of).@"union".fields) |union_field| {
                 const v = @field(desc_union, union_field.name);
                 if (is_tag_known(v, extracted_data)) {
                     // deinit the current value of the enum to prevent leaks
@@ -969,7 +969,7 @@ inline fn is_tag_known(comptime field_desc: FieldDescriptor, tag_to_check: Extra
         return field_number == tag_to_check.field_number;
     } else {
         const desc_union = field_desc.ftype.OneOf._union_desc;
-        inline for (@typeInfo(@TypeOf(desc_union)).Struct.fields) |union_field| {
+        inline for (@typeInfo(@TypeOf(desc_union)).@"struct".fields) |union_field| {
             if (is_tag_known(@field(desc_union, union_field.name), tag_to_check)) {
                 return true;
             }
@@ -1013,10 +1013,10 @@ fn freeAllocated(allocator: Allocator, token: json.Token) void {
 fn fillDefaultStructValues(
     comptime T: type,
     r: *T,
-    fields_seen: *[@typeInfo(T).Struct.fields.len]bool,
+    fields_seen: *[@typeInfo(T).@"struct".fields.len]bool,
 ) !void {
     // Took from std.json source code since it was non-public one
-    inline for (@typeInfo(T).Struct.fields, 0..) |field, i| {
+    inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
         if (!fields_seen[i]) {
             if (field.default_value) |default_ptr| {
                 const default = @as(
@@ -1104,13 +1104,13 @@ fn parseStructField(
             var union_value: switch (@typeInfo(
                 @TypeOf(@field(result.*, fieldInfo.name)),
             )) {
-                .Union => @TypeOf(@field(result.*, fieldInfo.name)),
-                .Optional => |optional| optional.child,
+                .@"union" => @TypeOf(@field(result.*, fieldInfo.name)),
+                .optional => |optional| optional.child,
                 else => unreachable,
             } = undefined;
 
             const union_type = @TypeOf(union_value);
-            const union_info = @typeInfo(union_type).Union;
+            const union_info = @typeInfo(union_type).@"union";
             if (union_info.tag_type == null) {
                 @compileError("Untagged unions are not supported here");
             }
@@ -1251,8 +1251,8 @@ fn to_camel_case(not_camel_cased_string: []const u8) []const u8 {
 
 fn print_numeric(value: anytype, jws: anytype) !void {
     switch (@typeInfo(@TypeOf(value))) {
-        .Float, .ComptimeFloat => {},
-        .Int, .ComptimeInt, .Enum, .Bool => {
+        .float, .comptime_float => {},
+        .int, .comptime_int, .@"enum", .bool => {
             try jws.write(value);
             return;
         },
@@ -1386,7 +1386,7 @@ fn stringify_struct_field(
         },
         .OneOf => |oneof| {
             // Tagged union type
-            const union_info = @typeInfo(@TypeOf(value)).Union;
+            const union_info = @typeInfo(@TypeOf(value)).@"union";
             if (union_info.tag_type == null) {
                 @compileError("Untagged unions are not supported here");
             }
@@ -1481,7 +1481,7 @@ pub fn MessageMixins(comptime Self: type) type {
 
             // Mainly taken from 0.13.0's source code
             var result: Self = undefined;
-            const structInfo = @typeInfo(Self).Struct;
+            const structInfo = @typeInfo(Self).@"struct";
             var fields_seen = [_]bool{false} ** structInfo.fields.len;
 
             while (true) {
@@ -1573,7 +1573,7 @@ pub fn MessageMixins(comptime Self: type) type {
         pub fn jsonStringify(self: *const Self, jws: anytype) !void {
             try jws.beginObject();
 
-            inline for (@typeInfo(Self).Struct.fields) |fieldInfo| {
+            inline for (@typeInfo(Self).@"struct".fields) |fieldInfo| {
                 const camel_case_name = comptime to_camel_case(fieldInfo.name);
 
                 if (switch (@typeInfo(fieldInfo.type)) {
